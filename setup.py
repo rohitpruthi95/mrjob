@@ -21,6 +21,7 @@ try:
             'boto>=2.2.0',
             'PyYAML',
             'simplejson>=2.0.9',
+            'qds_sdk>=1.2.1'
         ],
         'provides': ['mrjob'],
         'test_suite': 'tests.suite.load_tests',

@@ -32,6 +32,7 @@ except ImportError:
 from mrjob.conf import combine_dicts
 from mrjob.options import add_basic_opts
 from mrjob.options import add_emr_opts
+from mrjob.options import add_qubole_opts
 from mrjob.options import add_hadoop_opts
 from mrjob.options import add_hadoop_emr_opts
 from mrjob.options import add_hadoop_shared_opts
@@ -155,6 +156,7 @@ class MRJobLauncher(object):
         # have to import here so that we can still run the MRJob
         # without importing boto
         from mrjob.emr import EMRJobRunner
+        from mrjob.qubole import QuboleJobRunner
         from mrjob.hadoop import HadoopJobRunner
         from mrjob.local import LocalMRJobRunner
 
@@ -163,6 +165,10 @@ class MRJobLauncher(object):
 
         elif self.options.runner == 'hadoop':
             return HadoopJobRunner(**self.hadoop_job_runner_kwargs())
+
+        elif self.options.runner == 'qubole':
+            print 'qubole runner in launch.py->make_runner()'
+            return QuboleJobRunner(**self.qubole_job_runner_kwargs())
 
         elif self.options.runner == 'inline':
             raise ValueError("inline is not supported in the multi-lingual"
@@ -295,6 +301,16 @@ class MRJobLauncher(object):
         self.option_parser.add_option_group(self.emr_opt_group)
 
         add_emr_opts(self.emr_opt_group)
+
+        # options for running the job on Qubole
+        self.qubole_opt_group = OptionGroup(
+            self.option_parser,
+            'Running on Qubole (these apply when you set -r'
+            ' qubole)')
+        self.option_parser.add_option_group(self.qubole_opt_group)
+
+        add_qubole_opts(self.qubole_opt_group)
+
 
     def all_option_groups(self):
         return (self.option_parser, self.proto_opt_group,
@@ -551,6 +567,19 @@ class MRJobLauncher(object):
         return combine_dicts(
             self.job_runner_kwargs(),
             self._get_kwargs_from_opt_group(self.emr_opt_group))
+
+    def qubole_job_runner_kwargs(self):
+        """Keyword arguments to create create runners when
+        :py:meth:`make_runner` is called, when we run a job on Qubole
+        (``-r Qubole``).
+
+        :return: map from arg name to value
+
+        Re-define this if you want finer control when running jobs on Qubole.
+        """
+        return combine_dicts(
+            self.job_runner_kwargs(),
+            self._get_kwargs_from_opt_group(self.qubole_opt_group))
 
     def hadoop_job_runner_kwargs(self):
         """Keyword arguments to create create runners when

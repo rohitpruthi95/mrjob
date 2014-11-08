@@ -190,12 +190,15 @@ class QuboleRunnerOptionStore(RunnerOptionStore):
     # documentation of these options is in docs/guides/emr-opts.rst
 
     ALLOWED_KEYS = RunnerOptionStore.ALLOWED_KEYS.union(set([
+        'aws_access_key_id',
+        'aws_secret_access_key',
+        'api_token',
+        'api_version',
+        'cluster_label',
         'additional_emr_info',
         'ami_version',
-        'aws_access_key_id',
         'aws_availability_zone',
         'aws_region',
-        'aws_secret_access_key',
         'bootstrap',
         'bootstrap_actions',
         'bootstrap_cmds',
@@ -1155,8 +1158,7 @@ class QuboleJobRunner(MRJobRunner):
 
 
     def _configure_qubole_connection(self):
-        # TODO: This should read in from the config file...
-        Qubole.configure(api_token='TXhxzXghZWx3YzBX1XWdnkyFFjRXjdq3L9dk8UQNAoM1zSnX1RGnZq7nyQoPiBn4', version='v1.2')
+        Qubole.configure(api_token=self._opts['api_token'], version=self._opts['api_version'])
 
     def _launch_qubole_job(self):
         """Create ..."""
@@ -1166,7 +1168,7 @@ class QuboleJobRunner(MRJobRunner):
         print "### debug: _launch_qubole_job: "
         print steps
 
-        composite = CompositeCommand.compose(steps, cluster_label='default', notify=False, macros=None)
+        composite = CompositeCommand.compose(steps, cluster_label=self._opts['cluster_label'], notify=False, macros=None)
         CompositeCommand.run(**composite)
         self._qubole_job_start = time.time()
 
