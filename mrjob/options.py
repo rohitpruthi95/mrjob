@@ -278,8 +278,7 @@ def add_hadoop_opts(opt_group):
 
 def add_qubole_opts(opt_group):
     return [
-        opt_group.add_option('--cluster_label', dest='cluster_label', default='default',
-                             help='Qubole Cluster Label')
+    # not sure what needs to go here...
     ]
 
 def add_emr_opts(opt_group):

@@ -1,17 +1,3 @@
-# -*- coding: utf-8 -*-
-# Copyright 2009-2013 Yelp and Contributors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 from __future__ import with_statement
 
 import logging
@@ -108,19 +94,16 @@ from mrjob.util import shlex_split
 
 # Qubole Python SDK: https://github.com/qubole/qds-sdk-py
 from qds_sdk.commands import *
-QUBOLE_HADOOP_VERSION='0.20.1-dev'
+QUBOLE_HADOOP_VERSION = '0.20.1-dev'
+QUBOLE_POLL_TIME = 6
+QUBOLE_ANALYZE_URL = 'https://api.qubole.com/v2/analyze?command_id='
 
 log = logging.getLogger(__name__)
-
-JOB_TRACKER_RE = re.compile(r'(\d{1,3}\.\d{2})%')
 
 # not all steps generate task attempt logs. for now, conservatively check for
 # streaming steps, which always generate them.
 LOG_GENERATING_STEP_NAME_RE = HADOOP_STREAMING_JAR_RE
 
-# the port to tunnel to
-EMR_JOB_TRACKER_PORT = 9100
-EMR_JOB_TRACKER_PATH = '/jobtracker.jsp'
 
 MAX_SSH_RETRIES = 20
 
@@ -184,6 +167,8 @@ def _lock_acquire_step_2(key, job_name):
 class LogFetchError(Exception):
     pass
 
+class QuboleError(Exception):
+    pass
 
 class QuboleRunnerOptionStore(RunnerOptionStore):
 
@@ -195,7 +180,6 @@ class QuboleRunnerOptionStore(RunnerOptionStore):
         'api_token',
         'api_version',
         'cluster_label',
-        'additional_emr_info',
         'ami_version',
         'aws_availability_zone',
         'aws_region',
@@ -205,22 +189,8 @@ class QuboleRunnerOptionStore(RunnerOptionStore):
         'bootstrap_files',
         'bootstrap_python_packages',
         'bootstrap_scripts',
-        'check_emr_status_every',
-        'ec2_core_instance_bid_price',
-        'ec2_core_instance_type',
-        'ec2_instance_type',
         'ec2_key_pair',
         'ec2_key_pair_file',
-        'ec2_master_instance_bid_price',
-        'ec2_master_instance_type',
-        'ec2_slave_instance_type',
-        'ec2_task_instance_bid_price',
-        'ec2_task_instance_type',
-        'emr_api_params',
-        'emr_endpoint',
-        'emr_job_flow_id',
-        'emr_job_flow_pool_name',
-        'enable_emr_debugging',
         'hadoop_streaming_jar_on_emr',
         'hadoop_version',
         'iam_job_flow_role',
@@ -230,7 +200,6 @@ class QuboleRunnerOptionStore(RunnerOptionStore):
         'pool_wait_minutes',
         'num_ec2_instances',
         'num_ec2_task_instances',
-        'pool_emr_job_flows',
         's3_endpoint',
         's3_log_uri',
         's3_scratch_uri',
@@ -240,6 +209,7 @@ class QuboleRunnerOptionStore(RunnerOptionStore):
         'ssh_tunnel_is_open',
         'ssh_tunnel_to_job_tracker',
         'visible_to_all_users',
+        'emr_job_flow_id',
     ]))
 
     COMBINERS = combine_dicts(RunnerOptionStore.COMBINERS, {
@@ -253,7 +223,7 @@ class QuboleRunnerOptionStore(RunnerOptionStore):
         's3_log_uri': combine_paths,
         's3_scratch_uri': combine_paths,
         'ssh_bin': combine_cmds,
-        'emr_api_params': combine_dicts
+        #'emr_api_params': combine_dicts
     })
 
     def __init__(self, alias, opts, conf_path):
@@ -271,26 +241,15 @@ class QuboleRunnerOptionStore(RunnerOptionStore):
 
 class QuboleJobRunner(MRJobRunner):
     """Runs an :py:class:`~mrjob.job.MRJob` on Amazon Elastic MapReduce.
-    Invoked when you run your job with ``-r emr``.
+    Invoked when you run your job with ``-r qubole``.
 
-    :py:class:`EMRJobRunner` runs your job in an EMR job flow, which is
-    basically a temporary Hadoop cluster. Normally, it creates a job flow
-    just for your job; it's also possible to run your job in a specific
-    job flow by setting *emr_job_flow_id* or to automatically choose a
-    waiting job flow, creating one if none exists, by setting
-    *pool_emr_job_flows*.
+    :py:class:`QuboleJobRunner` runs your job in Qubole as a Qubole Workflow Command.
 
     Input, support, and jar files can be either local or on S3; use
     ``s3://...`` URLs to refer to files on S3.
 
     This class has some useful utilities for talking directly to S3 and EMR,
     so you may find it useful to instantiate it without a script::
-
-        from mrjob.emr import EMRJobRunner
-
-        emr_conn = EMRJobRunner().make_emr_conn()
-        job_flows = emr_conn.describe_jobflows()
-        ...
     """
     alias = 'qubole'
 
@@ -301,17 +260,8 @@ class QuboleJobRunner(MRJobRunner):
     OPTION_STORE_CLASS = QuboleRunnerOptionStore
 
     def __init__(self, **kwargs):
-        """:py:class:`~mrjob.emr.EMRJobRunner` takes the same arguments as
-        :py:class:`~mrjob.runner.MRJobRunner`, plus some additional options
-        which can be defaulted in :ref:`mrjob.conf <mrjob.conf>`.
-
-        *aws_access_key_id* and *aws_secret_access_key* are required if you
-        haven't set them up already for boto (e.g. by setting the environment
-        variables :envvar:`AWS_ACCESS_KEY_ID` and
-        :envvar:`AWS_SECRET_ACCESS_KEY`)
-
-        A lengthy list of additional options can be found in
-        :doc:`guides/emr-opts.rst`.
+        """
+        <TODO: Comments>
         """
         super(QuboleJobRunner, self).__init__(**kwargs)
 
@@ -366,11 +316,6 @@ class QuboleJobRunner(MRJobRunner):
             for maybe_path_dict in cmd:
                 if isinstance(maybe_path_dict, dict):
                     self._bootstrap_dir_mgr.add(**maybe_path_dict)
-
-        if not (isinstance(self._opts['additional_emr_info'], basestring)
-                or self._opts['additional_emr_info'] is None):
-            self._opts['additional_emr_info'] = json.dumps(
-                self._opts['additional_emr_info'])
 
         # where our own logs ended up (we'll find this out once we run the job)
         self._s3_job_log_uri = None
@@ -552,10 +497,8 @@ class QuboleJobRunner(MRJobRunner):
 
     def _run(self):
         self._prepare_for_launch()
-
-        #self._launch_emr_job()
-        self._launch_qubole_job()
-        #self._wait_for_job_to_complete()
+        qubole_command = self._launch_qubole_job()
+        self._wait_for_job_to_complete(qubole_command)
 
     def _prepare_for_launch(self):
         self._check_input_exists()
@@ -653,134 +596,10 @@ class QuboleJobRunner(MRJobRunner):
             s3_key = self.make_s3_key(s3_uri, s3_conn)
             s3_key.set_contents_from_filename(path)
 
-    def setup_ssh_tunnel_to_job_tracker(self, host):
-        """setup the ssh tunnel to the job tracker, if it's not currently
-        running.
-
-        Args:
-        host -- hostname of the EMR master node.
-        """
-        REQUIRED_OPTS = ['ec2_key_pair', 'ec2_key_pair_file', 'ssh_bind_ports']
-        for opt_name in REQUIRED_OPTS:
-            if not self._opts[opt_name]:
-                if not self._gave_cant_ssh_warning:
-                    log.warning(
-                        "You must set %s in order to ssh to the job tracker!" %
-                        opt_name)
-                    self._gave_cant_ssh_warning = True
-                return
-
-        # if there was already a tunnel, make sure it's still up
-        if self._ssh_proc:
-            self._ssh_proc.poll()
-            if self._ssh_proc.returncode is None:
-                return
-            else:
-                log.warning('Oops, ssh subprocess exited with return code %d,'
-                            ' restarting...' % self._ssh_proc.returncode)
-                self._ssh_proc = None
-
-        log.info('Opening ssh tunnel to Hadoop job tracker')
-
-        # if ssh detects that a host key has changed, it will silently not
-        # open the tunnel, so make a fake empty known_hosts file and use that.
-        # (you can actually use /dev/null as your known hosts file, but
-        # that's UNIX-specific)
-        fake_known_hosts_file = os.path.join(
-            self._get_local_tmp_dir(), 'fake_ssh_known_hosts')
-        # blank out the file, if it exists
-        f = open(fake_known_hosts_file, 'w')
-        f.close()
-        log.debug('Created empty ssh known-hosts file: %s' % (
-            fake_known_hosts_file,))
-
-        bind_port = None
-        for bind_port in self._pick_ssh_bind_ports():
-            args = self._opts['ssh_bin'] + [
-                '-o', 'VerifyHostKeyDNS=no',
-                '-o', 'StrictHostKeyChecking=no',
-                '-o', 'ExitOnForwardFailure=yes',
-                '-o', 'UserKnownHostsFile=%s' % fake_known_hosts_file,
-                '-L', '%d:localhost:%d' % (bind_port, EMR_JOB_TRACKER_PORT),
-                '-N', '-q',  # no shell, no output
-                '-i', self._opts['ec2_key_pair_file'],
-            ]
-            if self._opts['ssh_tunnel_is_open']:
-                args.extend(['-g', '-4'])  # -4: listen on IPv4 only
-            args.append('hadoop@' + host)
-            log.debug('> %s' % cmd_line(args))
-
-            ssh_proc = Popen(args, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-            time.sleep(WAIT_FOR_SSH_TO_FAIL)
-            ssh_proc.poll()
-            # still running. We are golden
-            if ssh_proc.returncode is None:
-                self._ssh_proc = ssh_proc
-                break
-
-        if not self._ssh_proc:
-            log.warning('Failed to open ssh tunnel to job tracker')
-        else:
-            if self._opts['ssh_tunnel_is_open']:
-                bind_host = socket.getfqdn()
-            else:
-                bind_host = 'localhost'
-            self._tracker_url = 'http://%s:%d%s' % (
-                bind_host, bind_port, EMR_JOB_TRACKER_PATH)
-            self._show_tracker_progress = True
-            log.info('Connect to job tracker at: %s' % self._tracker_url)
-
-    def _pick_ssh_bind_ports(self):
-        """Pick a list of ports to try binding our SSH tunnel to.
-
-        We will try to bind the same port for any given job flow (Issue #67)
-        """
-        # don't perturb the random number generator
-        random_state = random.getstate()
-        try:
-            # seed random port selection on job flow ID
-            random.seed(self._emr_job_flow_id)
-            num_picks = min(MAX_SSH_RETRIES, len(self._opts['ssh_bind_ports']))
-            return random.sample(self._opts['ssh_bind_ports'], num_picks)
-        finally:
-            random.setstate(random_state)
-
-    def _enable_slave_ssh_access(self):
-        if self._ssh_fs and not self._ssh_key_is_copied:
-            ssh_copy_key(
-                self._opts['ssh_bin'],
-                self._address_of_master(),
-                self._opts['ec2_key_pair_file'],
-                self._ssh_key_name)
-
     ### Running the job ###
 
     def cleanup(self, mode=None):
         super(QuboleJobRunner, self).cleanup(mode=mode)
-
-        # always stop our SSH tunnel if it's still running
-        if self._ssh_proc:
-            self._ssh_proc.poll()
-            if self._ssh_proc.returncode is None:
-                log.info('Killing our SSH tunnel (pid %d)' %
-                         self._ssh_proc.pid)
-                try:
-                    os.kill(self._ssh_proc.pid, signal.SIGKILL)
-                    self._ssh_proc = None
-                except Exception, e:
-                    log.exception(e)
-
-        # stop the job flow if it belongs to us (it may have stopped on its
-        # own already, but that's fine)
-        # don't stop it if it was created due to --pool because the user
-        # probably wants to use it again
-        if self._emr_job_flow_id and not self._opts['emr_job_flow_id'] \
-                and not self._opts['pool_emr_job_flows']:
-            log.info('Terminating job flow: %s' % self._emr_job_flow_id)
-            try:
-                self.make_emr_conn().terminate_jobflow(self._emr_job_flow_id)
-            except Exception, e:
-                log.exception(e)
 
     def _cleanup_remote_scratch(self):
         # delete all the files we created
@@ -838,21 +657,6 @@ class QuboleJobRunner(MRJobRunner):
             except IOError:
                 log.info(error_msg)
 
-    def _cleanup_job_flow(self):
-        if not self._emr_job_flow_id:
-            # If we don't have a job flow, then we can't terminate it.
-            return
-
-        emr_conn = self.make_emr_conn()
-        try:
-            log.info("Attempting to terminate job flow")
-            emr_conn.terminate_jobflow(self._emr_job_flow_id)
-        except Exception, e:
-            # Something happened with boto and the user should know.
-            log.exception(e)
-            return
-        log.info('Job flow %s successfully terminated' % self._emr_job_flow_id)
-
     def _wait_for_s3_eventual_consistency(self):
         """Sleep for a little while, to give S3 a chance to sync up.
         """
@@ -863,198 +667,6 @@ class QuboleJobRunner(MRJobRunner):
     def _job_flow_is_done(self, job_flow):
         return job_flow.state in ('TERMINATED', 'COMPLETED', 'FAILED',
                                   'SHUTTING_DOWN')
-
-    def _wait_for_job_flow_termination(self):
-        try:
-            jobflow = self._describe_jobflow()
-        except boto.exception.S3ResponseError:
-            # mockboto throws this for some reason
-            return
-        if (jobflow.keepjobflowalivewhennosteps == 'true' and
-                jobflow.state == 'WAITING'):
-            raise Exception('Operation requires job flow to terminate, but'
-                            ' it may never do so.')
-        while not self._job_flow_is_done(jobflow):
-            msg = 'Waiting for job flow to terminate (currently %s)' % (
-                jobflow.state)
-            log.info(msg)
-            time.sleep(self._opts['check_emr_status_every'])
-            jobflow = self._describe_jobflow()
-
-    def _create_instance_group(self, role, instance_type, count, bid_price):
-        """Helper method for creating instance groups. For use when
-        creating a jobflow using a list of InstanceGroups, instead
-        of the typical triumverate of
-        num_instances/master_instance_type/slave_instance_type.
-
-            - Role is either 'master', 'core', or 'task'.
-            - instance_type is an EC2 instance type
-            - count is an int
-            - bid_price is a number, a string, or None. If None,
-              this instance group will be use the ON-DEMAND market
-              instead of the SPOT market.
-        """
-
-        if not instance_type:
-            if self._opts['ec2_instance_type']:
-                instance_type = self._opts['ec2_instance_type']
-            else:
-                raise ValueError('Missing instance type for %s node(s)' % role)
-
-        if bid_price:
-            market = 'SPOT'
-            bid_price = str(bid_price)  # must be a string
-        else:
-            market = 'ON_DEMAND'
-            bid_price = None
-
-        # Just name the groups "master", "task", and "core"
-        name = role.lower()
-
-        return boto.emr.instance_group.InstanceGroup(
-            count, role, instance_type, market, name, bidprice=bid_price)
-
-    def _create_job_flow(self, persistent=False, steps=None):
-        """Create an empty job flow on EMR, and return the ID of that
-        job.
-
-        persistent -- if this is true, create the job flow with the keep_alive
-            option, indicating the job will have to be manually terminated.
-        """
-        # make sure we can see the files we copied to S3
-        self._wait_for_s3_eventual_consistency()
-
-        log.info('Creating Elastic MapReduce job flow')
-        args = self._job_flow_args(persistent, steps)
-
-        emr_conn = self.make_emr_conn()
-        log.debug('Calling run_jobflow(%r, %r, %s)' % (
-            self._job_name, self._opts['s3_log_uri'],
-            ', '.join('%s=%r' % (k, v) for k, v in args.iteritems())))
-        emr_job_flow_id = emr_conn.run_jobflow(
-            self._job_name, self._opts['s3_log_uri'], **args)
-
-         # keep track of when we started our job
-        self._emr_job_start = time.time()
-
-        log.info('Job flow created with ID: %s' % emr_job_flow_id)
-        return emr_job_flow_id
-
-    def _job_flow_args(self, persistent=False, steps=None):
-        """Build kwargs for emr_conn.run_jobflow()"""
-        args = {}
-
-        args['ami_version'] = self._opts['ami_version']
-        args['hadoop_version'] = self._opts['hadoop_version']
-
-        if self._opts['aws_availability_zone']:
-            args['availability_zone'] = self._opts['aws_availability_zone']
-
-        # The old, simple API, available if we're not using task instances
-        # or bid prices
-        if not (self._opts['num_ec2_task_instances'] or
-                self._opts['ec2_core_instance_bid_price'] or
-                self._opts['ec2_master_instance_bid_price'] or
-                self._opts['ec2_task_instance_bid_price']):
-            args['num_instances'] = self._opts['num_ec2_core_instances'] + 1
-            args['master_instance_type'] = (
-                self._opts['ec2_master_instance_type'])
-            args['slave_instance_type'] = self._opts['ec2_core_instance_type']
-        else:
-            # Create a list of InstanceGroups
-            args['instance_groups'] = [
-                self._create_instance_group(
-                    'MASTER',
-                    self._opts['ec2_master_instance_type'],
-                    1,
-                    self._opts['ec2_master_instance_bid_price']
-                ),
-            ]
-
-            if self._opts['num_ec2_core_instances']:
-                args['instance_groups'].append(
-                    self._create_instance_group(
-                        'CORE',
-                        self._opts['ec2_core_instance_type'],
-                        self._opts['num_ec2_core_instances'],
-                        self._opts['ec2_core_instance_bid_price']
-                    )
-                )
-
-            if self._opts['num_ec2_task_instances']:
-                args['instance_groups'].append(
-                    self._create_instance_group(
-                        'TASK',
-                        self._opts['ec2_task_instance_type'],
-                        self._opts['num_ec2_task_instances'],
-                        self._opts['ec2_task_instance_bid_price']
-                    )
-                )
-
-        # bootstrap actions
-        bootstrap_action_args = []
-
-        for i, bootstrap_action in enumerate(self._bootstrap_actions):
-            s3_uri = self._upload_mgr.uri(bootstrap_action['path'])
-            bootstrap_action_args.append(
-                boto.emr.BootstrapAction(
-                    'action %d' % i, s3_uri, bootstrap_action['args']))
-
-        if self._master_bootstrap_script_path:
-            master_bootstrap_script_args = []
-            if self._opts['pool_emr_job_flows']:
-                master_bootstrap_script_args = [
-                    'pool-' + self._pool_hash(),
-                    self._opts['emr_job_flow_pool_name'],
-                ]
-            bootstrap_action_args.append(
-                boto.emr.BootstrapAction(
-                    'master',
-                    self._upload_mgr.uri(self._master_bootstrap_script_path),
-                    master_bootstrap_script_args))
-
-        if persistent or self._opts['pool_emr_job_flows']:
-            args['keep_alive'] = True
-
-            # only use idle termination script on persistent job flows
-            # add it last, so that we don't count bootstrapping as idle time
-            if self._opts['max_hours_idle']:
-                s3_uri = self._upload_mgr.uri(
-                    _MAX_HOURS_IDLE_BOOTSTRAP_ACTION_PATH)
-                # script takes args in (integer) seconds
-                ba_args = [int(self._opts['max_hours_idle'] * 3600),
-                           int(self._opts['mins_to_end_of_hour'] * 60)]
-                bootstrap_action_args.append(
-                    boto.emr.BootstrapAction('idle timeout', s3_uri, ba_args))
-
-        if bootstrap_action_args:
-            args['bootstrap_actions'] = bootstrap_action_args
-
-        if self._opts['ec2_key_pair']:
-            args['ec2_keyname'] = self._opts['ec2_key_pair']
-
-        if self._opts['enable_emr_debugging']:
-            args['enable_debugging'] = True
-
-        if self._opts['additional_emr_info']:
-            args['additional_info'] = self._opts['additional_emr_info']
-
-        if self._opts['visible_to_all_users'] and not 'VisibleToAllUsers' in self._opts['emr_api_params']:
-            self._opts['emr_api_params']['VisibleToAllUsers'] = \
-                'true' if self._opts['visible_to_all_users'] else 'false'
-
-        if self._opts['emr_api_params']:
-            args['api_params'] = self._opts['emr_api_params']
-
-        if self._opts['iam_job_flow_role']:
-            if 'api_params' not in args:
-                args.setdefault('api_params', {})
-            args['api_params']['JobFlowRole'] = self._opts['iam_job_flow_role']
-
-        if steps:
-            args['steps'] = steps
-
-        return args
 
     def _build_steps(self):
         """Return a list of boto Step objects corresponding to the
@@ -1110,8 +722,6 @@ class QuboleJobRunner(MRJobRunner):
         if combiner:
             wf_step_args = wf_step_args + ' -combiner ' + "'" + streaming_step_kwargs['combiner'] + "'"
 
-        print "### debug _build_streaming_step: "
-        print wf_step_args
         return HadoopCommand.parse(shlex_split(wf_step_args))
 
     def _build_jar_step(self, step_num):
@@ -1144,16 +754,16 @@ class QuboleJobRunner(MRJobRunner):
 
     def _cache_kwargs(self):
         step_args = []
-        #cache_files = []
-        #cache_archives = []
+        cache_files = []
+        cache_archives = []
 
         step_args.extend(self._new_upload_args(self._upload_mgr))
 
         return {
             'step_args': step_args,
             # Qubole: Not sure if we need or can use these
-            #'cache_files': cache_files,
-            #'cache_archives': cache_archives,
+            # 'cache_files': cache_files,
+            # 'cache_archives': cache_archives,
         }
 
 
@@ -1165,151 +775,50 @@ class QuboleJobRunner(MRJobRunner):
         self._create_s3_temp_bucket_if_needed()
         self._configure_qubole_connection()
         steps = self._build_steps()
-        print "### debug: _launch_qubole_job: "
-        print steps
 
-        composite = CompositeCommand.compose(steps, cluster_label=self._opts['cluster_label'], notify=False, macros=None)
-        CompositeCommand.run(**composite)
+        """ Creating a Qubole Workflow Command (aka: CompositeCommand) ... """
+        composite = CompositeCommand.compose(steps, cluster_label=self._opts['cluster_label'], notify=False, name=self._job_name)
+        composite_command = CompositeCommand.create(**composite)
+        # CompositeCommand.run(**composite)
         self._qubole_job_start = time.time()
+        log.info("Starting Qubole Command: %s" % composite_command.id)
+        log.info("Qubole UI Link: %s" % QUBOLE_ANALYZE_URL+str(composite_command.id))
+        return composite_command
 
-    def _wait_for_job_to_complete(self):
+    def _wait_for_job_to_complete(self, composite_command):
         """Wait for the job to complete, and raise an exception if
         the job failed.
 
-        Also grab log URI from the job status (since we may not know it)
         """
-        success = False
-
+        # grab the command ID, poll for status
+        # Print results and run time
+        # Consider allowing verbose flag to grab logs (or maybe we just print the logs as we poll...)
+        gcount=0
+        lcount=0
         while True:
-            # don't antagonize EMR's throttling
-            log.debug('Waiting %.1f seconds...' %
-                      self._opts['check_emr_status_every'])
-            time.sleep(self._opts['check_emr_status_every'])
-
-            job_flow = self._describe_jobflow()
-
-            self._set_s3_job_log_uri(job_flow)
-
-            job_state = job_flow.state
-            reason = getattr(job_flow, 'laststatechangereason', '')
-
-            # find all steps belonging to us, and get their state
-            step_states = []
-            running_step_name = ''
-            total_step_time = 0.0
-            step_nums = []  # step numbers belonging to us. 1-indexed
-            lg_step_num_mapping = {}
-
-            steps = job_flow.steps or []
-            latest_lg_step_num = 0
-            for i, step in enumerate(steps):
-                if LOG_GENERATING_STEP_NAME_RE.match(
-                        posixpath.basename(getattr(step, 'jar', ''))):
-                    latest_lg_step_num += 1
-
-                # ignore steps belonging to other jobs
-                if not step.name.startswith(self._job_name):
+            sts = HiveCommand.find(composite_command.id).status
+            if sts == u'error' or sts == u'done' or sts == u'cancelled':
+                break
+            time.sleep(QUBOLE_POLL_TIME)
+            # Print the logs to the console
+            qlog=CompositeCommand.find(composite_command.id).get_log()
+            str=qlog.split('\n')
+            lcount=0
+            for line in str:
+                if lcount < gcount:
+                    lcount = lcount+1
                     continue
+                log.info(line)
+                lcount = lcount+1
+                gcount = gcount+1
 
-                step_nums.append(i + 1)
-                if LOG_GENERATING_STEP_NAME_RE.match(
-                        posixpath.basename(getattr(step, 'jar', ''))):
-                    lg_step_num_mapping[i + 1] = latest_lg_step_num
+        if sts != u'done':
+            error_str = composite_command.get_log()
+            sys.stderr.write(error_str)
+            raise QuboleError(error_str)
+        composite_command.get_results()
 
-                step.state = step.state
-                step_states.append(step.state)
-                if step.state == 'RUNNING':
-                    running_step_name = step.name
 
-                if (hasattr(step, 'startdatetime') and
-                        hasattr(step, 'enddatetime')):
-                    start_time = iso8601_to_timestamp(step.startdatetime)
-                    end_time = iso8601_to_timestamp(step.enddatetime)
-                    total_step_time += end_time - start_time
-
-            if not step_states:
-                raise AssertionError("Can't find our steps in the job flow!")
-
-            # if all our steps have completed, we're done!
-            if all(state == 'COMPLETED' for state in step_states):
-                success = True
-                break
-
-            # if any step fails, give up
-            if any(state in ('FAILED', 'CANCELLED') for state in step_states):
-                break
-
-            # (the other step states are PENDING and RUNNING)
-
-            # keep track of how long we've been waiting
-            running_time = time.time() - self._emr_job_start
-
-            # otherwise, we can print a status message
-            if running_step_name:
-                log.info('Job launched %.1fs ago, status %s: %s (%s)' %
-                         (running_time, job_state, reason, running_step_name))
-
-                if self._show_tracker_progress:
-                    try:
-                        tracker_handle = urllib2.urlopen(self._tracker_url)
-                        tracker_page = ''.join(tracker_handle.readlines())
-                        tracker_handle.close()
-                        # first two formatted percentages, map then reduce
-                        map_complete, reduce_complete = [
-                            float(complete) for complete
-                            in JOB_TRACKER_RE.findall(tracker_page)[:2]]
-                        log.info(' map %3d%% reduce %3d%%' % (
-                                 map_complete, reduce_complete))
-                    except:
-                        log.error('Unable to load progress from job tracker')
-                        # turn off progress for rest of job
-                        self._show_tracker_progress = False
-                # once a step is running, it's safe to set up the ssh tunnel to
-                # the job tracker
-                job_host = getattr(job_flow, 'masterpublicdnsname', None)
-                if job_host and self._opts['ssh_tunnel_to_job_tracker']:
-                    self.setup_ssh_tunnel_to_job_tracker(job_host)
-
-            # other states include STARTING and SHUTTING_DOWN
-            elif reason:
-                log.info('Job launched %.1fs ago, status %s: %s' %
-                         (running_time, job_state, reason))
-            else:
-                log.info('Job launched %.1fs ago, status %s' %
-                         (running_time, job_state,))
-
-        if success:
-            log.info('Job completed.')
-            log.info('Running time was %.1fs (not counting time spent waiting'
-                     ' for the EC2 instances)' % total_step_time)
-            self._fetch_counters(step_nums, lg_step_num_mapping)
-            self.print_counters(range(1, len(step_nums) + 1))
-        else:
-            msg = 'Job on job flow %s failed with status %s: %s' % (
-                job_flow.jobflowid, job_state, reason)
-            log.error(msg)
-            if self._s3_job_log_uri:
-                log.info('Logs are in %s' % self._s3_job_log_uri)
-            # look for a Python traceback
-            cause = self._find_probable_cause_of_failure(
-                step_nums, sorted(lg_step_num_mapping.values()))
-            if cause:
-                # log cause, and put it in exception
-                cause_msg = []  # lines to log and put in exception
-                cause_msg.append('Probable cause of failure (from %s):' %
-                                 cause['log_file_uri'])
-                cause_msg.extend(line.strip('\n') for line in cause['lines'])
-                if cause['input_uri']:
-                    cause_msg.append('(while reading from %s)' %
-                                     cause['input_uri'])
-
-                for line in cause_msg:
-                    log.error(line)
-
-                # add cause_msg to exception message
-                msg += '\n' + '\n'.join(cause_msg) + '\n'
-
-            raise Exception(msg)
 
     def _step_input_uris(self, step_num):
         """Get the s3:// URIs for input for the given step."""
@@ -1486,242 +995,6 @@ class QuboleJobRunner(MRJobRunner):
         writeln()
 
         return out.getvalue()
-
-    ### EMR JOB MANAGEMENT UTILS ###
-    def get_emr_job_flow_id(self):
-        return self._emr_job_flow_id
-
-    def usable_job_flows(self, emr_conn=None, exclude=None, num_steps=1):
-        """Get job flows that this runner can use.
-
-        We basically expect to only join available job flows with the exact
-        same setup as our own, that is:
-
-        - same bootstrap setup (including mrjob version)
-        - have the same Hadoop and AMI version
-        - same number and type of instances
-
-        However, we allow joining job flows where for each role, every instance
-        has at least as much memory as we require, and the total number of
-        compute units is at least what we require.
-
-        There also must be room for our job in the job flow (job flows top out
-        at 256 steps).
-
-        We then sort by:
-        - total compute units for core + task nodes
-        - total compute units for master node
-        - time left to an even instance hour
-
-        The most desirable job flows come *last* in the list.
-
-        :return: list of (job_minutes_float,
-                 :py:class:`botoemr.emrobject.JobFlow`)
-        """
-        emr_conn = emr_conn or self.make_emr_conn()
-        exclude = exclude or set()
-
-        req_hash = self._pool_hash()
-
-        # decide memory and total compute units requested for each
-        # role type
-        role_to_req_instance_type = {}
-        role_to_req_num_instances = {}
-        role_to_req_mem = {}
-        role_to_req_cu = {}
-        role_to_req_bid_price = {}
-
-        for role in ('core', 'master', 'task'):
-            instance_type = self._opts['ec2_%s_instance_type' % role]
-            if role == 'master':
-                num_instances = 1
-            else:
-                num_instances = self._opts['num_ec2_%s_instances' % role]
-
-            role_to_req_instance_type[role] = instance_type
-            role_to_req_num_instances[role] = num_instances
-
-            role_to_req_bid_price[role] = (
-                self._opts['ec2_%s_instance_bid_price' % role])
-
-            # unknown instance types can only match themselves
-            role_to_req_mem[role] = (
-                EC2_INSTANCE_TYPE_TO_MEMORY.get(instance_type, float('Inf')))
-            role_to_req_cu[role] = (
-                num_instances *
-                EC2_INSTANCE_TYPE_TO_COMPUTE_UNITS.get(instance_type,
-                                                       float('Inf')))
-
-        sort_keys_and_job_flows = []
-        # no point in showing this warning multiple times
-        # make this a list so we can set it from within add_if_match()
-        warned_about_ami_version_latest = []
-
-        def add_if_match(job_flow):
-            # this may be a retry due to locked job flows
-            if job_flow.jobflowid in exclude:
-                return
-
-            # only take persistent job flows
-            if job_flow.keepjobflowalivewhennosteps != 'true':
-                return
-
-            # match pool name, and (bootstrap) hash
-            hash, name = pool_hash_and_name(job_flow)
-            if req_hash != hash:
-                return
-
-            if self._opts['emr_job_flow_pool_name'] != name:
-                return
-
-            if self._opts['hadoop_version']:
-                # match hadoop version
-                if job_flow.hadoopversion != self._opts['hadoop_version']:
-                    return
-
-            if self._opts['ami_version'] != 'latest':
-                # match AMI version
-                job_flow_ami_version = getattr(job_flow, 'amiversion', None)
-                # Support partial matches, e.g. let a request for
-                # '2.4' pass if the version is '2.4.2'. The version
-                # extracted from the existing job flow should always
-                # be a full major.minor.patch, so checking matching
-                # prefixes should be sufficient.
-                if not job_flow_ami_version.startswith(self._opts['ami_version']):
-                    return
-            else:
-                if not warned_about_ami_version_latest:
-                    log.warning(
-                        "When AMI version is set to 'latest', job flow pooling"
-                        " can result in the job being added to a pool using an"
-                        " older AMI version")
-                    # warned_about_... = True would just set a local variable
-                    warned_about_ami_version_latest.append(True)
-
-            # there is a hard limit of 256 steps per job flow
-            if len(job_flow.steps) + num_steps > MAX_STEPS_PER_JOB_FLOW:
-                return
-
-            # in rare cases, job flow can be WAITING *and* have incomplete
-            # steps. We could just check for PENDING steps, but we're
-            # trying to be defensive about EMR adding a new step state.
-            for step in job_flow.steps:
-                if (getattr(step, 'enddatetime', None) is None and
-                        getattr(step, 'state', None) != 'CANCELLED'):
-                    return
-
-            # total compute units per group
-            role_to_cu = defaultdict(float)
-            # total number of instances of the same type in each group.
-            # This allows us to match unknown instance types.
-            role_to_matched_instances = defaultdict(int)
-
-            # check memory and compute units, bailing out if we hit
-            # an instance with too little memory
-            for ig in job_flow.instancegroups:
-                role = ig.instancerole.lower()
-
-                # unknown, new kind of role; bail out!
-                if role not in ('core', 'master', 'task'):
-                    return
-
-                req_instance_type = role_to_req_instance_type[role]
-                if ig.instancetype != req_instance_type:
-                    # if too little memory, bail out
-                    mem = EC2_INSTANCE_TYPE_TO_MEMORY.get(ig.instancetype, 0.0)
-                    req_mem = role_to_req_mem.get(role, 0.0)
-                    if mem < req_mem:
-                        return
-
-                # if bid price is too low, don't count compute units
-                req_bid_price = role_to_req_bid_price[role]
-                bid_price = getattr(ig, 'bidprice', None)
-
-                # if the instance is on-demand (no bid price) or bid prices
-                # are the same, we're okay
-                if bid_price and bid_price != req_bid_price:
-                    # whoops, we didn't want spot instances at all
-                    if not req_bid_price:
-                        continue
-
-                    try:
-                        if float(req_bid_price) > float(bid_price):
-                            continue
-                    except ValueError:
-                        # we don't know what to do with non-float bid prices,
-                        # and we know it's not equal to what we requested
-                        continue
-
-                # don't require instances to be running; we'd be worse off if
-                # we started our own job flow from scratch. (This can happen if
-                # the previous job finished while some task instances were
-                # still being provisioned.)
-                cu = (int(ig.instancerequestcount) *
-                      EC2_INSTANCE_TYPE_TO_COMPUTE_UNITS.get(
-                          ig.instancetype, 0.0))
-                role_to_cu.setdefault(role, 0.0)
-                role_to_cu[role] += cu
-
-                # track number of instances of the same type
-                if ig.instancetype == req_instance_type:
-                    role_to_matched_instances[role] += (
-                        int(ig.instancerequestcount))
-
-            # check if there are enough compute units
-            for role, req_cu in role_to_req_cu.iteritems():
-                req_num_instances = role_to_req_num_instances[role]
-                # if we have at least as many units of the right type,
-                # don't bother counting compute units
-                if req_num_instances > role_to_matched_instances[role]:
-                    cu = role_to_cu.get(role, 0.0)
-                    if cu < req_cu:
-                        return
-
-            # make a sort key
-            sort_key = (role_to_cu['core'] + role_to_cu['task'],
-                        role_to_cu['master'],
-                        est_time_to_hour(job_flow))
-
-            sort_keys_and_job_flows.append((sort_key, job_flow))
-
-        for job_flow in emr_conn.describe_jobflows(states=['WAITING']):
-            add_if_match(job_flow)
-
-        return [job_flow for (sort_key, job_flow)
-                in sorted(sort_keys_and_job_flows)]
-
-
-    def _pool_hash(self):
-        """Generate a hash of the bootstrap configuration so it can be used to
-        match jobs and job flows. This first argument passed to the bootstrap
-        script will be ``'pool-'`` plus this hash.
-
-        The way the hash is calculated may vary between point releases
-        (pooling requires the exact same version of :py:mod:`mrjob` anyway).
-        """
-        things_to_hash = [
-            # exclude mrjob.tar.gz because it's only created if the
-            # job starts its own job flow (also, its hash changes every time
-            # since the tarball contains different timestamps).
-            # The filenames/md5sums are sorted because we need to
-            # ensure the order they're added doesn't affect the hash
-            # here. Previously this used a dict, but Python doesn't
-            # guarantee the ordering of dicts -- they can vary
-            # depending on insertion/deletion order.
-            sorted(
-                (name, self.md5sum(path)) for name, path
-                in self._bootstrap_dir_mgr.name_to_path('file').iteritems()
-                if not path == self._mrjob_tar_gz_path),
-            self._opts['additional_emr_info'],
-            self._bootstrap,
-            self._bootstrap_actions,
-            self._opts['bootstrap_cmds'],
-            self._opts['bootstrap_mrjob'],
-        ]
-
-        if self._opts['bootstrap_mrjob']:
-            things_to_hash.append(mrjob.__version__)
-        return hash_object(things_to_hash)
 
     def get_hadoop_version(self):
         return QUBOLE_HADOOP_VERSION
