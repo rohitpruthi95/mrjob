@@ -435,14 +435,15 @@ class QuboleJobRunner(MRJobRunner):
         log.info("creating new scratch bucket %s" % scratch_bucket_name)
         self._opts['s3_scratch_uri'] = 's3://%s/tmp/' % scratch_bucket_name
 
-    def _set_s3_job_log_uri(self, job_flow):
-        """Given a job flow description, set self._s3_job_log_uri. This allows
-        us to call self.ls(), etc. without running the job.
-        """
-        log_uri = getattr(job_flow, 'loguri', '')
-        if log_uri:
-            self._s3_job_log_uri = '%s%s/' % (
-                log_uri.replace('s3n://', 's3://'), self._emr_job_flow_id)
+    # The function below looked unnecessary and hence has been commented-out
+    # def _set_s3_job_log_uri(self, job_flow):
+    #     """Given a job flow description, set self._s3_job_log_uri. This allows
+    #     us to call self.ls(), etc. without running the job.
+    #     """
+    #     log_uri = getattr(job_flow, 'loguri', '')
+    #     if log_uri:
+    #         self._s3_job_log_uri = '%s%s/' % (
+    #             log_uri.replace('s3n://', 's3://'), self._emr_job_flow_id)
 
     def _create_s3_temp_bucket_if_needed(self):
         """Make sure temp bucket exists"""
@@ -503,7 +504,7 @@ class QuboleJobRunner(MRJobRunner):
     def _prepare_for_launch(self):
         self._check_input_exists()
         self._check_output_not_exists()
-        self._create_setup_wrapper_script()
+        #self._create_setup_wrapper_script() - Qubole: setup commands are now handled in a different way by adding a step in workflow instead of creating a wrapper script
         #self._add_bootstrap_files_for_upload()
         self._add_job_files_for_upload()
         self._upload_local_files_to_s3()
@@ -611,19 +612,20 @@ class QuboleJobRunner(MRJobRunner):
             except Exception, e:
                 log.exception(e)
 
-    def _cleanup_logs(self):
-        super(QuboleJobRunner, self)._cleanup_logs()
+    # function looked unused, hence removed. Maybe a similar function can be added in future when logs are handled in a better way
+    # def _cleanup_logs(self):
+    #     super(QuboleJobRunner, self)._cleanup_logs()
 
-        # delete the log files, if it's a job flow we created (the logs
-        # belong to the job flow)
-        if self._s3_job_log_uri and not self._opts['emr_job_flow_id'] \
-                and not self._opts['pool_emr_job_flows']:
-            try:
-                log.info('Removing all files in %s' % self._s3_job_log_uri)
-                self.rm(self._s3_job_log_uri)
-                self._s3_job_log_uri = None
-            except Exception, e:
-                log.exception(e)
+    #     # delete the log files, if it's a job flow we created (the logs
+    #     # belong to the job flow)
+    #     if self._s3_job_log_uri and not self._opts['emr_job_flow_id'] \
+    #             and not self._opts['pool_emr_job_flows']:
+    #         try:
+    #             log.info('Removing all files in %s' % self._s3_job_log_uri)
+    #             self.rm(self._s3_job_log_uri)
+    #             self._s3_job_log_uri = None
+    #         except Exception, e:
+    #             log.exception(e)
 
     def _cleanup_job(self):
         # kill the job if we won't be taking down the whole job flow
@@ -673,7 +675,10 @@ class QuboleJobRunner(MRJobRunner):
         steps we want to run."""
         # quick, add the other steps before the job spins up and
         # then shuts itself down (in practice this takes several minutes)
-        return [self._build_step(n) for n in xrange(self._num_steps())]
+        steps = [self._build_step(n) for n in xrange(self._num_steps())]
+        if self._setup:
+            steps.insert(0,self._build_shell_step(self._setup))
+        return steps
 
     def _build_step(self, step_num):
         step = self._get_step(step_num)
@@ -723,6 +728,15 @@ class QuboleJobRunner(MRJobRunner):
             wf_step_args = wf_step_args + ' -combiner ' + "'" + streaming_step_kwargs['combiner'] + "'"
 
         return HadoopCommand.parse(shlex_split(wf_step_args))
+
+    def _build_shell_step(self, shell_cmd):
+        final_cmd = "'"
+        for cmd in shell_cmd:
+            for token in cmd:
+                final_cmd += token + ";"
+        final_cmd += "'"
+        wf_step_args = '--script=' + final_cmd
+        return ShellCommand.parse(shlex_split(wf_step_args))
 
     def _build_jar_step(self, step_num):
         step = self._get_step(step_num)
