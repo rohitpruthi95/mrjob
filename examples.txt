@@ -1,0 +1,17 @@
+#Basic Test
+python mrjob/examples/mr_word_freq_count.py -r qubole README.rst > test
+
+#Test to check if the setup option works. We can enter any bash command in this option
+python mrjob/examples/mr_word_freq_count.py -r qubole --setup "mkdir test" --setup "ls" README.rst > test
+
+#Test to check if a different streaming jar works
+python mrjob/examples/mr_word_freq_count.py -r qubole --hadoop-streaming-jar="hadoop-streaming-0.20.203.0.jar" README.rst > test
+
+#Test to check if uploading a file works
+python mrjob/examples/mr_word_freq_count.py -r qubole --files CHANGES.txt README.rst > test
+
+#Multiple steps check
+python mrjob/examples/mr_most_used_word.py -r qubole README.rst > test
+
+#Custom Jar File Check. Instead of running a streaming command, we can run our own jar command as a step
+python mrjob/examples/mr_jar_step_example.py -r qubole README.rst > test

@@ -24,8 +24,7 @@ from mrjob.protocol import RawProtocol
 from mrjob.step import JarStep
 from mrjob.step import MRStep
 
-# use the file:// trick to access a jar hosted on the EMR machines
-HADOOP_EXAMPLES_JAR = 'file:///home/hadoop/hadoop-examples.jar'
+HADOOP_EXAMPLES_JAR = 'hadoop-examples.jar'
 
 
 class MRJarStepExample(MRJob):
