@@ -315,7 +315,8 @@ class MRJobLauncher(object):
     def all_option_groups(self):
         return (self.option_parser, self.proto_opt_group,
                 self.runner_opt_group, self.hadoop_emr_opt_group,
-                self.emr_opt_group, self.hadoop_opts_opt_group)
+                self.qubole_opt_group, self.emr_opt_group,
+                self.hadoop_opts_opt_group)
 
     def is_mapper_or_reducer(self):
         """True if this is a mapper/reducer.

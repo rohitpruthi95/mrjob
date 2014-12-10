@@ -1,8 +1,8 @@
 #Basic Test
 python mrjob/examples/mr_word_freq_count.py -r qubole README.rst > test
 
-#Test to check if the setup option works. We can enter any bash command in this option
-python mrjob/examples/mr_word_freq_count.py -r qubole --setup "mkdir test" --setup "ls" README.rst > test
+#Test to check if the qubole bootstrap option works. We can enter any bash command in this option, to be executed before running the script itself
+python mrjob/examples/mr_word_freq_count.py -r qubole --qubole-bootstrap "mkdir test" --qubole-bootstrap "ls" README.rst > test
 
 #Test to check if a different streaming jar works
 python mrjob/examples/mr_word_freq_count.py -r qubole --hadoop-streaming-jar="hadoop-streaming-0.20.203.0.jar" README.rst > test

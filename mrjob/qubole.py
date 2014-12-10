@@ -183,7 +183,7 @@ class QuboleRunnerOptionStore(RunnerOptionStore):
         'ami_version',
         'aws_availability_zone',
         'aws_region',
-        'bootstrap',
+        'qubole_bootstrap',
         'bootstrap_actions',
         'bootstrap_cmds',
         'bootstrap_files',
@@ -213,7 +213,7 @@ class QuboleRunnerOptionStore(RunnerOptionStore):
     ]))
 
     COMBINERS = combine_dicts(RunnerOptionStore.COMBINERS, {
-        'bootstrap': combine_lists,
+        'qubole_bootstrap': combine_lists,
         'bootstrap_actions': combine_lists,
         'bootstrap_cmds': combine_lists,
         'bootstrap_files': combine_path_lists,
@@ -293,7 +293,7 @@ class QuboleJobRunner(MRJobRunner):
         s3_files_dir = self._s3_tmp_uri + 'files/'
         self._upload_mgr = UploadDirManager(s3_files_dir)
 
-        # Code commented out because we are not using bootstrap. --setup options will still work. Might be added in future
+        # Code commented out because we are not creating a bootstrap script. Instead, the --qubole-bootstrap option will work.
         # # add the bootstrap files to a list of files to upload
         # self._bootstrap_actions = []
         # for action in self._opts['bootstrap_actions']:
@@ -310,7 +310,7 @@ class QuboleJobRunner(MRJobRunner):
         #     self._bootstrap_dir_mgr.add(**parse_legacy_hash_path(
         #         'file', path, must_name='bootstrap_files'))
 
-        # self._bootstrap = self._parse_bootstrap()
+        self._bootstrap = self._parse_bootstrap()
         # # self._legacy_bootstrap = self._parse_legacy_bootstrap()
 
         # for cmd in self._bootstrap + self._legacy_bootstrap:
@@ -677,8 +677,8 @@ class QuboleJobRunner(MRJobRunner):
         # quick, add the other steps before the job spins up and
         # then shuts itself down (in practice this takes several minutes)
         steps = [self._build_step(n) for n in xrange(self._num_steps())]
-        if self._setup:
-            steps.insert(0,self._build_shell_step(self._setup))
+        if self._bootstrap:
+            steps.insert(0,self._build_shell_step(self._bootstrap))
         return steps
 
     def _build_step(self, step_num):
@@ -856,7 +856,7 @@ class QuboleJobRunner(MRJobRunner):
                 self._job_name, step_num + 1)
 
     ### Bootstrapping ###
-    # We are NOT going to use bootstrap now, use --setup command to add any script. We might add_ this option in future
+    # Bootstrap script is not created. Instead, a shell command is executed as first step in workflow if we use the --qubole-bootstrap command
     # def _create_master_bootstrap_script_if_needed(self):
     #     """Helper for :py:meth:`_add_bootstrap_files_for_upload`.
 
@@ -919,11 +919,11 @@ class QuboleJobRunner(MRJobRunner):
 
     #     self._master_bootstrap_script_path = path
 
-    # def _parse_bootstrap(self):
-    #     """Parse the *bootstrap* option with
-    #     :py:func:`mrjob.setup.parse_setup_cmd()`.
-    #     """
-    #     return [parse_setup_cmd(cmd) for cmd in self._opts['bootstrap']]
+    def _parse_bootstrap(self):
+        """Parse the *bootstrap* option with
+        :py:func:`mrjob.setup.parse_setup_cmd()`.
+        """
+        return [parse_setup_cmd(cmd) for cmd in self._opts['qubole_bootstrap']]
 
     # def _parse_legacy_bootstrap(self):
     #     """Parse the deprecated

@@ -278,7 +278,12 @@ def add_hadoop_opts(opt_group):
 
 def add_qubole_opts(opt_group):
     return [
-    # not sure what needs to go here...
+        opt_group.add_option(
+            '--qubole-bootstrap', dest='qubole_bootstrap', action='append',
+            help=('A shell command to set up libraries etc. before any steps'
+                  ' (e.g. "sudo apt-get -qy install python3"). You may'
+                  ' interpolate files available via URL or locally with Hadoop'
+                  ' Distributed Cache syntax ("sudo dpkg -i foo.deb#")')),
     ]
 
 def add_emr_opts(opt_group):
