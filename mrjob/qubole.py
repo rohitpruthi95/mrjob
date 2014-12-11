@@ -286,7 +286,7 @@ class QuboleJobRunner(MRJobRunner):
             self._output_dir = self._s3_tmp_uri + 'output/'
 
         # # manage working dir for bootstrap script
-        # self._bootstrap_dir_mgr = BootstrapWorkingDirManager()
+        self._bootstrap_dir_mgr = BootstrapWorkingDirManager() #adding because of setup wrapper
 
         # manage local files that we want to upload to S3. We'll add them
         # to this manager just before we need them.
@@ -505,8 +505,8 @@ class QuboleJobRunner(MRJobRunner):
     def _prepare_for_launch(self):
         self._check_input_exists()
         self._check_output_not_exists()
-        #self._create_setup_wrapper_script() - Qubole: setup commands are now handled in a different way by adding a step in workflow instead of creating a wrapper script
-        #self._add_bootstrap_files_for_upload()
+        self._create_setup_wrapper_script() # To get --setup version working
+        self._add_bootstrap_files_for_upload()
         self._add_job_files_for_upload()
         self._upload_local_files_to_s3()
 
@@ -535,39 +535,39 @@ class QuboleJobRunner(MRJobRunner):
         except boto.exception.S3ResponseError:
             pass
 
-    # def _add_bootstrap_files_for_upload(self, persistent=False):
-    #     """Add files needed by the bootstrap script to self._upload_mgr.
+    def _add_bootstrap_files_for_upload(self, persistent=False):
+        """Add files needed by the bootstrap script to self._upload_mgr.
 
-    #     Tar up mrjob if bootstrap_mrjob is True.
+        Tar up mrjob if bootstrap_mrjob is True.
 
-    #     Create the master bootstrap script if necessary.
+        Create the master bootstrap script if necessary.
 
-    #     persistent -- set by make_persistent_job_flow()
-    #     """
-    #     # lazily create mrjob.tar.gz
-    #     if self._opts['bootstrap_mrjob']:
-    #         self._create_mrjob_tar_gz()
-    #         self._bootstrap_dir_mgr.add('file', self._mrjob_tar_gz_path)
+        persistent -- set by make_persistent_job_flow()
+        """
+        # lazily create mrjob.tar.gz
+        # if self._opts['bootstrap_mrjob']:
+        #     self._create_mrjob_tar_gz()
+        #     self._bootstrap_dir_mgr.add('file', self._mrjob_tar_gz_path)
 
-    #     # all other files needed by the script are already in
-    #     # _bootstrap_dir_mgr
-    #     for path in self._bootstrap_dir_mgr.paths():
-    #         self._upload_mgr.add(path)
+        # all other files needed by the script are already in
+        # _bootstrap_dir_mgr
+        for path in self._bootstrap_dir_mgr.paths():
+            self._upload_mgr.add(path)
 
-    #     # now that we know where the above files live, we can create
-    #     # the master bootstrap script
-    #     self._create_master_bootstrap_script_if_needed()
-    #     if self._master_bootstrap_script_path:
-    #         self._upload_mgr.add(self._master_bootstrap_script_path)
+        # # now that we know where the above files live, we can create
+        # # the master bootstrap script
+        # self._create_master_bootstrap_script_if_needed()
+        # if self._master_bootstrap_script_path:
+        #     self._upload_mgr.add(self._master_bootstrap_script_path)
 
-    #     # make sure bootstrap action scripts are on S3
-    #     for bootstrap_action in self._bootstrap_actions:
-    #         self._upload_mgr.add(bootstrap_action['path'])
+        # # make sure bootstrap action scripts are on S3
+        # for bootstrap_action in self._bootstrap_actions:
+        #     self._upload_mgr.add(bootstrap_action['path'])
 
-    #     # Add max-hours-idle script if we need it
-    #     if (self._opts['max_hours_idle'] and
-    #             (persistent or self._opts['pool_emr_job_flows'])):
-    #         self._upload_mgr.add(_MAX_HOURS_IDLE_BOOTSTRAP_ACTION_PATH)
+        # # Add max-hours-idle script if we need it
+        # if (self._opts['max_hours_idle'] and
+        #         (persistent or self._opts['pool_emr_job_flows'])):
+        #     self._upload_mgr.add(_MAX_HOURS_IDLE_BOOTSTRAP_ACTION_PATH)
 
     def _add_job_files_for_upload(self):
         """Add files needed for running the job (setup and input)
