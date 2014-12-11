@@ -224,7 +224,7 @@ def add_hadoop_shared_opts(opt_group):
 
 
 def add_hadoop_emr_opts(opt_group):
-    """Options for ``hadoop`` and ``emr`` runners"""
+    """Options for ``hadoop``, ``emr`` and ``qubole`` runners"""
     return [
         opt_group.add_option(
             '--hadoop-arg', dest='hadoop_extra_args', default=[],
