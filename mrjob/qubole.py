@@ -183,7 +183,7 @@ class QuboleRunnerOptionStore(RunnerOptionStore):
         'ami_version',
         'aws_availability_zone',
         'aws_region',
-        'qubole_bootstrap',
+        'bootstrap',
         'bootstrap_actions',
         'bootstrap_cmds',
         'bootstrap_files',
@@ -306,17 +306,17 @@ class QuboleJobRunner(MRJobRunner):
         #         'args': args[1:],
         #     })
 
-        # for path in self._opts['bootstrap_files']:
-        #     self._bootstrap_dir_mgr.add(**parse_legacy_hash_path(
-        #         'file', path, must_name='bootstrap_files'))
+        for path in self._opts['bootstrap_files']:
+            self._bootstrap_dir_mgr.add(**parse_legacy_hash_path(
+                'file', path, must_name='bootstrap_files'))
 
         self._bootstrap = self._parse_bootstrap()
-        # # self._legacy_bootstrap = self._parse_legacy_bootstrap()
+        self._legacy_bootstrap = self._parse_legacy_bootstrap()
 
-        # for cmd in self._bootstrap + self._legacy_bootstrap:
-        #     for maybe_path_dict in cmd:
-        #         if isinstance(maybe_path_dict, dict):
-        #             self._bootstrap_dir_mgr.add(**maybe_path_dict)
+        for cmd in self._legacy_bootstrap:
+            for maybe_path_dict in cmd:
+                if isinstance(maybe_path_dict, dict):
+                    self._bootstrap_dir_mgr.add(**maybe_path_dict)
 
         # where our own logs ended up (we'll find this out once we run the job)
         self._s3_job_log_uri = None
@@ -677,6 +677,9 @@ class QuboleJobRunner(MRJobRunner):
         # quick, add the other steps before the job spins up and
         # then shuts itself down (in practice this takes several minutes)
         steps = [self._build_step(n) for n in xrange(self._num_steps())]
+        if self._legacy_bootstrap:
+            log.info(self._legacy_bootstrap)
+            steps.insert(0,self._build_shell_step(self._legacy_bootstrap))
         if self._bootstrap:
             steps.insert(0,self._build_shell_step(self._bootstrap))
         return steps
@@ -737,7 +740,11 @@ class QuboleJobRunner(MRJobRunner):
         final_cmd = "'"
         for cmd in shell_cmd:
             for token in cmd:
-                final_cmd += token + ";"
+                if isinstance(token,dict):
+                    final_cmd += self._upload_mgr.uri(token['path'])
+                else:
+                    final_cmd += token
+            final_cmd += ';'
         final_cmd += "'"
         wf_step_args = '--script=' + final_cmd
         return ShellCommand.parse(shlex_split(wf_step_args))
@@ -923,45 +930,48 @@ class QuboleJobRunner(MRJobRunner):
         """Parse the *bootstrap* option with
         :py:func:`mrjob.setup.parse_setup_cmd()`.
         """
-        return [parse_setup_cmd(cmd) for cmd in self._opts['qubole_bootstrap']]
+        if self._opts['bootstrap']:
+            return [parse_setup_cmd(cmd) for cmd in self._opts['bootstrap']]
+        else:
+            return None
 
-    # def _parse_legacy_bootstrap(self):
-    #     """Parse the deprecated
-    #     options *bootstrap_python_packages*, and *bootstrap_cmds*
-    #     *bootstrap_scripts* as bootstrap commands, in that order.
+    def _parse_legacy_bootstrap(self):
+        """Parse the deprecated
+        options *bootstrap_python_packages*, and *bootstrap_cmds*
+        *bootstrap_scripts* as bootstrap commands, in that order.
 
-    #     This is a separate method from _parse_bootstrap() because bootstrapping
-    #     mrjob happens after the new bootstrap commands (so you can upgrade
-    #     Python) but before the legacy commands (for backwards compatibility).
-    #     """
-    #     bootstrap = []
+        This is a separate method from _parse_bootstrap() because bootstrapping
+        mrjob happens after the new bootstrap commands (so you can upgrade
+        Python) but before the legacy commands (for backwards compatibility).
+        """
+        bootstrap = []
 
-    #     # bootstrap_python_packages
-    #     if self._opts['bootstrap_python_packages']:
-    #         # 3.0.x AMIs use yum rather than apt-get;
-    #         # can't determine which AMI `latest` is at
-    #         # job flow creation time so we call both
-    #         bootstrap.append(['sudo apt-get install -y python-pip || '
-    #             'sudo yum install -y python-pip'])
+        # bootstrap_python_packages
+        if self._opts['bootstrap_python_packages']:
+            # 3.0.x AMIs use yum rather than apt-get;
+            # can't determine which AMI `latest` is at
+            # job flow creation time so we call both
+            bootstrap.append(['sudo apt-get install -y python-pip || '
+                'sudo yum install -y python-pip'])
 
-    #     for path in self._opts['bootstrap_python_packages']:
-    #         path_dict = parse_legacy_hash_path('file', path)
-    #         # don't worry about inspecting the tarball; pip is smart
-    #         # enough to deal with that
-    #         bootstrap.append(['sudo pip install ', path_dict])
+        for path in self._opts['bootstrap_python_packages']:
+            path_dict = parse_legacy_hash_path('file', path)
+            # don't worry about inspecting the tarball; pip is smart
+            # enough to deal with that
+            bootstrap.append(['sudo pip install ', path_dict])
 
-    #     # setup_cmds
-    #     for cmd in self._opts['bootstrap_cmds']:
-    #         if not isinstance(cmd, basestring):
-    #             cmd = cmd_line(cmd)
-    #         bootstrap.append([cmd])
+        # setup_cmds
+        for cmd in self._opts['bootstrap_cmds']:
+            if not isinstance(cmd, basestring):
+                cmd = cmd_line(cmd)
+            bootstrap.append([cmd])
 
-    #     # bootstrap_scripts
-    #     for path in self._opts['bootstrap_scripts']:
-    #         path_dict = parse_legacy_hash_path('file', path)
-    #         bootstrap.append([path_dict])
+        # bootstrap_scripts
+        for path in self._opts['bootstrap_scripts']:
+            path_dict = parse_legacy_hash_path('file', path)
+            bootstrap.append([path_dict])
 
-    #     return bootstrap
+        return bootstrap
 
     # def _master_bootstrap_script_content(self, bootstrap):
     #     """Create the contents of the master bootstrap script.

@@ -590,7 +590,7 @@ class MRJobLauncher(object):
         """
         return combine_dicts(
             self.job_runner_kwargs(),
-            self._get_kwargs_from_opt_group(self.qubole_opt_group))
+            self._get_kwargs_from_opt_group(self.emr_opt_group)) # For now not able to add same option name in Qubole option, hence adding all emr options instead
 
     def hadoop_job_runner_kwargs(self):
         """Keyword arguments to create create runners when
